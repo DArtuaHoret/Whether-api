@@ -1,3 +1,6 @@
+### W linku do dysku jest sama aplikacja do pobrania
+
+
 Opis projektu:
 
 Aplikacja umożliwia monitorowanie jakości powietrza w różnych miejscach w Polsce. Dzięki niej użytkownk może sprawdzić dane o jakości powietrza w czasie rzeczywistym, 
