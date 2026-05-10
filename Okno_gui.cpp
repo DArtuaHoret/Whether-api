@@ -271,7 +271,7 @@ void MainWindow::setupConnections() {
  */
 void MainWindow::on_pobierzStacje_clicked() {
     poleMiasto->clear();
-    m_filtrMiasto.clear(); // <-- wyczyść aktywny filtr
+    m_filtrMiasto.clear(); 
 
     if (listaStanowisk) listaStanowisk->clear();
     if (listaPomiarow)  listaPomiarow->clear();
@@ -295,7 +295,7 @@ void MainWindow::on_filtrujStacje_clicked() {
         return;
     }
 
-    m_filtrMiasto = miasto; // <-- zapisz filtr; użyjemy go gdy odpowiedź wróci
+    m_filtrMiasto = miasto; 
 
     if (listaStanowisk) listaStanowisk->clear();
     if (listaPomiarow)  listaPomiarow->clear();
@@ -435,7 +435,6 @@ void MainWindow::wyswietlStanowiska(const QJsonArray& stanowiska) {
     listaStanowisk->clear();
     foreach (const QJsonValue& val, stanowiska) {
         QJsonObject stanowisko = val.toObject();
-        // Po normalizacji w API zawsze mamy "param.paramName" i "id"
         QString paramName = stanowisko["param"].toObject()["paramName"].toString();
         int id = stanowisko["id"].toInt();
         QListWidgetItem *item = new QListWidgetItem(paramName);
