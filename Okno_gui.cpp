@@ -271,9 +271,10 @@ void MainWindow::setupConnections() {
  */
 void MainWindow::on_pobierzStacje_clicked() {
     poleMiasto->clear();
+    m_filtrMiasto.clear(); // <-- wyczyść aktywny filtr
 
     if (listaStanowisk) listaStanowisk->clear();
-    if (listaPomiarow) listaPomiarow->clear();
+    if (listaPomiarow)  listaPomiarow->clear();
     if (widokWykresu) {
         QChart* pustyWykres = new QChart();
         widokWykresu->setChart(pustyWykres);
@@ -294,14 +295,15 @@ void MainWindow::on_filtrujStacje_clicked() {
         return;
     }
 
+    m_filtrMiasto = miasto; // <-- zapisz filtr; użyjemy go gdy odpowiedź wróci
+
     if (listaStanowisk) listaStanowisk->clear();
-    if (listaPomiarow) listaPomiarow->clear();
+    if (listaPomiarow)  listaPomiarow->clear();
     if (widokWykresu) {
         QChart* pustyWykres = new QChart();
         widokWykresu->setChart(pustyWykres);
     }
 
-    poleMiasto->setFocus();
     apiService->pobierzWszystkieStacje();
 }
 
@@ -398,27 +400,28 @@ void MainWindow::on_filtrujPomiary_clicked() {
  */
 void MainWindow::wyswietlStacje(const QJsonArray& stacje) {
     listaStacji->clear();
-
-    bool filtrujPoMiescie = !poleMiasto->text().trimmed().isEmpty() &&
-                            (poleMiasto->hasFocus() || przyciskFiltrujStacje->isDown());
-    bool filtrujPoPromieniu = !poleLokalizacja->text().trimmed().isEmpty() &&
-                              (poleLokalizacja->hasFocus() || przyciskSzukajWPromieniu->isDown());
-
-    QString filtrMiasto = poleMiasto->text().trimmed();
     QJsonArray stacjeDoWyswietlenia;
 
     foreach (const QJsonValue& val, stacje) {
         QJsonObject stacja = val.toObject();
-        QString nazwa = stacja["stationName"].toString();
-        QString miasto = stacja["city"].toObject()["name"].toString();
-        int id = stacja["id"].toInt();
 
-        if (filtrujPoMiescie && !miasto.contains(filtrMiasto, Qt::CaseInsensitive)) {
+        // v1: "Nazwa stacji", stary: "stationName"
+        QString nazwa = stacja["Nazwa stacji"].toString();
+        if (nazwa.isEmpty()) nazwa = stacja["stationName"].toString();
+
+        // v1: "Nazwa miasta" bezpośrednio, stary: city.name
+        QString miasto = stacja["Nazwa miasta"].toString();
+        if (miasto.isEmpty()) miasto = stacja["city"].toObject()["name"].toString();
+
+        // v1: "Identyfikator stacji", stary: "id"
+        int id = stacja["Identyfikator stacji"].toInt();
+        if (id == 0) id = stacja["id"].toInt();
+
+        if (!m_filtrMiasto.isEmpty() &&
+            !miasto.contains(m_filtrMiasto, Qt::CaseInsensitive))
             continue;
-        }
 
         stacjeDoWyswietlenia.append(stacja);
-
         QListWidgetItem *item = new QListWidgetItem(nazwa + " (" + miasto + ")");
         item->setData(Qt::UserRole, id);
         listaStacji->addItem(item);
@@ -430,12 +433,11 @@ void MainWindow::wyswietlStacje(const QJsonArray& stacje) {
 
 void MainWindow::wyswietlStanowiska(const QJsonArray& stanowiska) {
     listaStanowisk->clear();
-
     foreach (const QJsonValue& val, stanowiska) {
         QJsonObject stanowisko = val.toObject();
+        // Po normalizacji w API zawsze mamy "param.paramName" i "id"
         QString paramName = stanowisko["param"].toObject()["paramName"].toString();
         int id = stanowisko["id"].toInt();
-
         QListWidgetItem *item = new QListWidgetItem(paramName);
         item->setData(Qt::UserRole, id);
         listaStanowisk->addItem(item);
@@ -467,6 +469,8 @@ void MainWindow::wyswietlPomiary(const QJsonArray& pomiary, const QString& param
         QJsonObject pomiar = val.toObject();
         QString data = pomiar["date"].toString();
         QDateTime dateTime = QDateTime::fromString(data, Qt::ISODate);
+        if (!dateTime.isValid())
+            dateTime = QDateTime::fromString(data, "yyyy-MM-dd HH:mm:ss");
 
         if (first) {
             minDate = dateTime;
@@ -544,6 +548,8 @@ void MainWindow::wyswietlWykres(const QJsonArray& dane, const QString& parametrK
         if (!pomiar["value"].isNull()) {
             QString data = pomiar["date"].toString();
             QDateTime dateTime = QDateTime::fromString(data, Qt::ISODate);
+            if (!dateTime.isValid())
+                dateTime = QDateTime::fromString(data, "yyyy-MM-dd HH:mm:ss");
             if (dateTime >= startDate && dateTime <= endDate) {
                 double value = pomiar["value"].toDouble();
                 points.append(QPointF(dateTime.toMSecsSinceEpoch(), value));
@@ -620,43 +626,53 @@ void MainWindow::on_szukajWPromieniu_clicked() {
 void MainWindow::rysujMapePolski(const QJsonArray& stacje) {
     scenaMapy->clear();
 
-    QPixmap mapaPixmap("kontur/poland.png");
+    QString sciezkaMapy = QCoreApplication::applicationDirPath() + "/kontur/poland.png";
+    QPixmap mapaPixmap(sciezkaMapy);
     if (mapaPixmap.isNull()) {
-        qDebug() << "Nie udało się wczytać mapy!";
+        qDebug() << "Nie udało się wczytać mapy z:" << sciezkaMapy;
         return;
     }
 
     QGraphicsPixmapItem* mapaItem = new QGraphicsPixmapItem(mapaPixmap);
     scenaMapy->addItem(mapaItem);
     scenaMapy->setSceneRect(mapaPixmap.rect());
-
     widokMapy->fitInView(mapaItem, Qt::KeepAspectRatio);
 
-    const double minLat = 49.0;
-    const double maxLat = 54.9;
-    const double minLon = 14.1;
-    const double maxLon = 24.2;
-
-    double mapWidth = mapaPixmap.width();
-    double mapHeight = mapaPixmap.height();
+    const double minLat = 49.0, maxLat = 54.9;
+    const double minLon = 14.1, maxLon = 24.2;
+    const QString klatN = QString::fromUtf8("WGS84 \xCF\x86 N");
+    const QString klonE = QString::fromUtf8("WGS84 \xCE\xBB E");
 
     for (const QJsonValue& val : stacje) {
         QJsonObject stacja = val.toObject();
-        double lat = stacja["gegrLat"].toString().toDouble();
-        double lon = stacja["gegrLon"].toString().toDouble();
 
-        double x = (lon - minLon) / (maxLon - minLon) * mapWidth;
-        double y = (1.0 - (lat - minLat) / (maxLat - minLat)) * mapHeight;
+        double lat = stacja[klatN].toString().toDouble();
+        if (qFuzzyIsNull(lat)) lat = stacja["gegrLat"].toString().toDouble();
 
-        QGraphicsEllipseItem* kolo = scenaMapy->addEllipse(x - 4, y - 4, 8, 8, QPen(Qt::blue), QBrush(Qt::blue));
+        double lon = stacja[klonE].toString().toDouble();
+        if (qFuzzyIsNull(lon)) lon = stacja["gegrLon"].toString().toDouble();
 
-        kolo->setToolTip(stacja["stationName"].toString() + "\n" + stacja["city"].toObject()["name"].toString());
+        int id = stacja["Identyfikator stacji"].toInt();
+        if (id == 0) id = stacja["id"].toInt();
 
-        kolo->setData(Qt::UserRole, stacja["id"].toInt());
+        QString nazwaStacji = stacja["Nazwa stacji"].toString();
+        if (nazwaStacji.isEmpty()) nazwaStacji = stacja["stationName"].toString();
 
+        QString nazwaKontekstowa = stacja["Nazwa miasta"].toString();
+        if (nazwaKontekstowa.isEmpty())
+            nazwaKontekstowa = stacja["city"].toObject()["name"].toString();
+
+        if (qFuzzyIsNull(lat) || qFuzzyIsNull(lon)) continue;
+
+        double x = (lon - minLon) / (maxLon - minLon) * mapaPixmap.width();
+        double y = (1.0 - (lat - minLat) / (maxLat - minLat)) * mapaPixmap.height();
+
+        QGraphicsEllipseItem* kolo = scenaMapy->addEllipse(
+            x - 4, y - 4, 8, 8, QPen(Qt::blue), QBrush(Qt::blue));
+        kolo->setToolTip(nazwaStacji + "\n" + nazwaKontekstowa);
+        kolo->setData(Qt::UserRole, id);
         kolo->setAcceptHoverEvents(true);
         kolo->setFlag(QGraphicsItem::ItemIsSelectable, true);
-        kolo->setFlag(QGraphicsItem::ItemIsFocusable, true);
         kolo->setCursor(Qt::PointingHandCursor);
     }
 }
