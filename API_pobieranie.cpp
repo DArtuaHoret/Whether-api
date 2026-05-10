@@ -149,7 +149,6 @@ void APIService::onReplyFinished(QNetworkReply *reply) {
         int httpStatus = reply->attribute(
                                   QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
-        // Stanowiska manualne (arsen, kadm itp.) zwracają 400 - brak danych bieżących
         if (url.contains("data/getData") && httpStatus == 400) {
             emit danePomiarowePobrane(QJsonArray(), "Brak danych bieżących");
             reply->deleteLater();
@@ -244,12 +243,12 @@ void APIService::przetworzOdpowiedzStacje(const QByteArray& odpowiedz) {
 
     QJsonArray stacje;
 
-    // Старый формат API
+
     if (doc.isArray()) {
         stacje = doc.array();
     }
 
-    // Новый формат API
+
     else if (doc.isObject()) {
         QJsonObject obj = doc.object();
 
@@ -287,7 +286,7 @@ void APIService::przetworzOdpowiedzStanowiska(const QByteArray& odpowiedz) {
     QJsonArray stanowiska;
 
     if (doc.isArray()) {
-        stanowiska = doc.array(); // stary format (na wypadek)
+        stanowiska = doc.array();
     } else if (doc.isObject()) {
         QJsonObject obj = doc.object();
         qDebug() << "Klucze stanowisk:" << obj.keys();
@@ -296,7 +295,6 @@ void APIService::przetworzOdpowiedzStanowiska(const QByteArray& odpowiedz) {
         if (obj.contains(klucz)) {
             stanowiska = obj[klucz].toArray();
         } else {
-            // Fallback — pierwsza tablica w obiekcie
             for (const QString& k : obj.keys()) {
                 if (obj[k].isArray()) {
                     stanowiska = obj[k].toArray();
@@ -312,12 +310,12 @@ void APIService::przetworzOdpowiedzStanowiska(const QByteArray& odpowiedz) {
         return;
     }
 
-    // Normalizacja do formatu wewnętrznego (id, param.paramName itp.)
+
     QJsonArray znormalizowane;
     for (const QJsonValue& val : stanowiska) {
         QJsonObject s = val.toObject();
 
-        // Nowy format v1
+ 
         if (s.contains("Identyfikator stanowiska")) {
             QJsonObject znorm;
             znorm["id"]        = s["Identyfikator stanowiska"].toInt();
@@ -330,7 +328,7 @@ void APIService::przetworzOdpowiedzStanowiska(const QByteArray& odpowiedz) {
             znorm["param"] = param;
             znormalizowane.append(znorm);
         } else {
-            znormalizowane.append(s); // stary format — już ok
+            znormalizowane.append(s); 
         }
     }
 
@@ -353,7 +351,7 @@ void APIService::przetworzOdpowiedzPomiary(const QByteArray& odpowiedz) {
 
     QJsonObject obj = doc.object();
 
-    // --- Stary format: {"key": "PM10", "values": [...]} ---
+
     if (obj.contains("key") && obj.contains("values")) {
         QString parametrKod = obj["key"].toString();
         aktualneDane["pomiary"] = obj;
@@ -362,7 +360,7 @@ void APIService::przetworzOdpowiedzPomiary(const QByteArray& odpowiedz) {
         return;
     }
 
-    // --- Nowy format v1: {"Lista danych pomiarowych": [...]} ---
+
     QJsonArray lista;
     for (const QString& k : obj.keys()) {
         if (obj[k].isArray()) {
@@ -376,20 +374,18 @@ void APIService::przetworzOdpowiedzPomiary(const QByteArray& odpowiedz) {
         return;
     }
 
-    // Wyciągnij kod parametru z "Kod stanowiska" np. "DsKrakBujaka-PM10-1g" -> "PM10"
+
     QString parametrKod = "N/A";
     if (!lista.isEmpty()) {
         QString kodStanowiska = lista.first().toObject()["Kod stanowiska"].toString();
         QStringList czesci = kodStanowiska.split("-");
         if (czesci.size() >= 3) {
-            // Usuń pierwszą (kod stacji) i ostatnią (interwał)
             czesci.removeFirst();
             czesci.removeLast();
             parametrKod = czesci.join("-");
         }
     }
 
-    // Normalizuj do formatu wewnętrznego {"date": ..., "value": ...}
     QJsonArray znormalizowane;
     for (const QJsonValue& val : lista) {
         QJsonObject p = val.toObject();
