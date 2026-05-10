@@ -1,3 +1,5 @@
+### English below
+
 ### W linku do dysku jest sama aplikacja do pobrania
 
 
@@ -46,3 +48,64 @@ W folderze html znajduje się dokumentacja proejktu (DOxygen).
 
 
 MADE BY ARTUR HORETSKYI 
+
+------------------------------------------------------------
+
+
+### The download link contains the application executable files
+
+
+## Project Description
+
+The application allows users to monitor air quality in different locations across Poland. It enables users to check real-time air quality data, as well as obtain information about pollution levels and the Air Quality Index (AQI). The application uses data provided by the Chief Inspectorate of Environmental Protection (GIOŚ), retrieved through an API.
+
+## Features
+
+- **Measurement station search:**  
+  Browse available monitoring stations in a selected city.
+
+- **Air Quality Index:**  
+  Calculate and display the Air Quality Index based on measurement data.
+
+- **Real-time data display:**  
+  Retrieve and present real-time pollution level data.
+
+- **Radius-based station search:**  
+  Find stations within a specified radius from a given location.
+
+- **Data saving and loading:**  
+  Save and load data from JSON files for later use.
+
+## Available station selection methods
+
+There are 4 available options for selecting stations:
+
+1. Download all available stations;
+
+2. Filter stations by city;
+
+3. Enter a location and search radius to find nearby stations;  
+   Supported formats:
+   - `Polanka 3, Poznań` — street + building number, city
+   - `60-695 Poznań, Polanka 3` — with postal code
+   - `Poznań, Polanka` — city and street/building
+
+4. Select stations directly on an interactive map  
+   (the map can be hidden if needed).
+
+After selecting a station, the user can choose a measuring point and optionally define a measurement range. The application also allows calculation of measurement statistics.
+
+---
+
+## Running Unit Tests
+
+In the project folder, type `cmd` in the folder path bar to open the command prompt.  
+Then run:
+
+```bash
+ProjektTests.exe
+```
+
+## Documentation
+
+Project documentation generated with Doxygen is available in the html folder.
