@@ -59,7 +59,7 @@ void APIService::zapiszDaneAutomatycznie() {
  */
 void APIService::pobierzWszystkieStacje() {
     QtConcurrent::run([=]() {
-        QUrl url("https://api.gios.gov.pl/pjp-api/rest/station/findAll");
+        QUrl url("https://api.gios.gov.pl/pjp-api/v1/rest/station/findAll?size=500");
         if (cache.contains(url.toString())) {
             QMetaObject::invokeMethod(this, [=]() {
                 przetworzOdpowiedzStacje(cache[url.toString()]->toJson());
@@ -81,17 +81,22 @@ void APIService::pobierzWszystkieStacje() {
  */
 void APIService::pobierzStacjeWMiescie(const QString& miasto) {
     QtConcurrent::run([=]() {
-        QUrl url("https://api.gios.gov.pl/pjp-api/rest/station/findAll");
+        QUrl url("https://api.gios.gov.pl/pjp-api/v1/rest/station/findAll?size=500");
 
         if (cache.contains(url.toString())) {
-            QJsonArray wszystkieStacje = cache[url.toString()]->array();
+            QJsonDocument* cachedDoc = cache[url.toString()];
+            QJsonArray wszystkieStacje;
+            if (cachedDoc->isObject()) {
+                QJsonObject obj = cachedDoc->object();
+                if (obj.contains("Lista stacji pomiarowych"))
+                    wszystkieStacje = obj["Lista stacji pomiarowych"].toArray();
+            }
             QJsonArray przefiltrowane = filtrujStacjePoMiescie(wszystkieStacje, miasto);
             QMetaObject::invokeMethod(this, [=]() {
                 emit daneStacjiPobrane(przefiltrowane);
             }, Qt::QueuedConnection);
             return;
         }
-
         QMetaObject::invokeMethod(this, [=]() {
             QNetworkRequest request(url);
             networkManager->get(request);
@@ -105,7 +110,7 @@ void APIService::pobierzStacjeWMiescie(const QString& miasto) {
  * @param stacjaId Identyfikator stacji.
  */
 void APIService::pobierzStanowiskaDlaStacji(int stacjaId) {
-    QUrl url(QString("https://api.gios.gov.pl/pjp-api/rest/station/sensors/%1").arg(stacjaId));
+    QUrl url(QString("https://api.gios.gov.pl/pjp-api/v1/rest/station/sensors/%1").arg(stacjaId));
     QNetworkRequest request(url);
     networkManager->get(request);
 }
@@ -116,7 +121,7 @@ void APIService::pobierzStanowiskaDlaStacji(int stacjaId) {
  * @param stanowiskoId Identyfikator stanowiska.
  */
 void APIService::pobierzDanePomiarowe(int stanowiskoId) {
-    QUrl url(QString("https://api.gios.gov.pl/pjp-api/rest/data/getData/%1").arg(stanowiskoId));
+    QUrl url(QString("https://api.gios.gov.pl/pjp-api/v1/rest/data/getData/%1").arg(stanowiskoId));
     QNetworkRequest request(url);
     networkManager->get(request);
 }
@@ -127,7 +132,7 @@ void APIService::pobierzDanePomiarowe(int stanowiskoId) {
  * @param stacjaId Identyfikator stacji.
  */
 void APIService::pobierzIndeksJakosciPowietrza(int stacjaId) {
-    QUrl url(QString("https://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/%1").arg(stacjaId));
+    QUrl url(QString("https://api.gios.gov.pl/pjp-api/v1/rest/aqindex/getIndex/%1").arg(stacjaId));
     QNetworkRequest request(url);
     networkManager->get(request);
 }
@@ -139,14 +144,24 @@ void APIService::pobierzIndeksJakosciPowietrza(int stacjaId) {
  * @param reply Wskaźnik do obiektu odpowiedzi sieciowej.
  */
 void APIService::onReplyFinished(QNetworkReply *reply) {
+    QString url = reply->url().toString();
     if (reply->error() != QNetworkReply::NoError) {
+        int httpStatus = reply->attribute(
+                                  QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+        // Stanowiska manualne (arsen, kadm itp.) zwracają 400 - brak danych bieżących
+        if (url.contains("data/getData") && httpStatus == 400) {
+            emit danePomiarowePobrane(QJsonArray(), "Brak danych bieżących");
+            reply->deleteLater();
+            return;
+        }
+
         emit blad("Błąd sieci: " + reply->errorString());
         reply->deleteLater();
         return;
     }
 
     QByteArray response = reply->readAll();
-    QString url = reply->url().toString();
     QJsonDocument doc = QJsonDocument::fromJson(response);
 
     if (doc.isNull()) {
@@ -168,12 +183,33 @@ void APIService::onReplyFinished(QNetworkReply *reply) {
     }
 
     if (url.contains("station/findAll")) {
+
+        QJsonArray stacje;
+
+        if (doc.isArray()) {
+            stacje = doc.array();
+        }
+        else if (doc.isObject()) {
+            QJsonObject obj = doc.object();
+
+            if (obj.contains("Lista stacji pomiarowych")) {
+                stacje =
+                    obj["Lista stacji pomiarowych"].toArray();
+            }
+        }
+
         if (reply->request().url().query().contains("miasto")) {
-            QString miasto = reply->request().url().query().split("=")[1];
-            QJsonArray przefiltrowane = filtrujStacjePoMiescie(doc.array(), miasto);
+
+            QString miasto =
+                reply->request().url().query().split("=")[1];
+
+            QJsonArray przefiltrowane =
+                filtrujStacjePoMiescie(stacje, miasto);
+
             emit daneStacjiPobrane(przefiltrowane);
-        } else {
-            przetworzOdpowiedzStacje(response);
+        }
+        else {
+            emit daneStacjiPobrane(stacje);
         }
     }
     else if (url.contains("station/sensors")) {
@@ -195,14 +231,50 @@ void APIService::onReplyFinished(QNetworkReply *reply) {
  * @param odpowiedz Dane odpowiedzi w postaci bajtów.
  */
 void APIService::przetworzOdpowiedzStacje(const QByteArray& odpowiedz) {
-    QJsonDocument doc = QJsonDocument::fromJson(odpowiedz);
-    if (!doc.isArray()) {
-        emit blad("Oczekiwano tablicy JSON");
+    qDebug().noquote() << "RAW RESPONSE:";
+    qDebug().noquote() << odpowiedz;
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(odpowiedz, &err);
+
+    if (err.error != QJsonParseError::NoError) {
+        emit blad("Błąd parsowania JSON: " + err.errorString());
         return;
     }
-    aktualneDane["stacje"] = doc.array();
+
+    QJsonArray stacje;
+
+    // Старый формат API
+    if (doc.isArray()) {
+        stacje = doc.array();
+    }
+
+    // Новый формат API
+    else if (doc.isObject()) {
+        QJsonObject obj = doc.object();
+
+        if (obj.contains("Lista stacji pomiarowych") &&
+            obj["Lista stacji pomiarowych"].isArray()) {
+
+            stacje = obj["Lista stacji pomiarowych"].toArray();
+        }
+        else {
+            emit blad("JSON nie zawiera tablicy stacji");
+            qDebug().noquote() << "OBJECT:";
+            qDebug() << obj;
+            return;
+        }
+    }
+    else {
+        emit blad("Nieprawidłowy format JSON");
+        return;
+    }
+
+    aktualneDane["stacje"] = stacje;
+
     zapiszDaneAutomatycznie();
-    emit daneStacjiPobrane(doc.array());
+
+    emit daneStacjiPobrane(stacje);
 }
 
 /**
@@ -212,13 +284,59 @@ void APIService::przetworzOdpowiedzStacje(const QByteArray& odpowiedz) {
  */
 void APIService::przetworzOdpowiedzStanowiska(const QByteArray& odpowiedz) {
     QJsonDocument doc = QJsonDocument::fromJson(odpowiedz);
-    if (!doc.isArray()) {
-        emit blad("Oczekiwano tablicy JSON");
+    QJsonArray stanowiska;
+
+    if (doc.isArray()) {
+        stanowiska = doc.array(); // stary format (na wypadek)
+    } else if (doc.isObject()) {
+        QJsonObject obj = doc.object();
+        qDebug() << "Klucze stanowisk:" << obj.keys();
+
+        const QString klucz = "Lista stanowisk pomiarowych dla podanej stacji";
+        if (obj.contains(klucz)) {
+            stanowiska = obj[klucz].toArray();
+        } else {
+            // Fallback — pierwsza tablica w obiekcie
+            for (const QString& k : obj.keys()) {
+                if (obj[k].isArray()) {
+                    stanowiska = obj[k].toArray();
+                    qDebug() << "Stanowiska fallback klucz:" << k;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (stanowiska.isEmpty()) {
+        emit blad("Brak stanowisk w odpowiedzi JSON");
         return;
     }
-    aktualneDane["stanowiska"] = doc.array();
+
+    // Normalizacja do formatu wewnętrznego (id, param.paramName itp.)
+    QJsonArray znormalizowane;
+    for (const QJsonValue& val : stanowiska) {
+        QJsonObject s = val.toObject();
+
+        // Nowy format v1
+        if (s.contains("Identyfikator stanowiska")) {
+            QJsonObject znorm;
+            znorm["id"]        = s["Identyfikator stanowiska"].toInt();
+            znorm["stationId"] = s["Identyfikator stacji"].toInt();
+            QJsonObject param;
+            param["paramName"]    = s["Wskaźnik"].toString();
+            param["paramFormula"] = s[QString::fromUtf8("Wskaźnik - wzór")].toString();
+            param["paramCode"]    = s["Wskaźnik - kod"].toString();
+            param["idParam"]      = s["Id wskaźnika"].toInt();
+            znorm["param"] = param;
+            znormalizowane.append(znorm);
+        } else {
+            znormalizowane.append(s); // stary format — już ok
+        }
+    }
+
+    aktualneDane["stanowiska"] = znormalizowane;
     zapiszDaneAutomatycznie();
-    emit daneStanowiskPobrane(doc.array());
+    emit daneStanowiskPobrane(znormalizowane);
 }
 
 /**
@@ -229,20 +347,64 @@ void APIService::przetworzOdpowiedzStanowiska(const QByteArray& odpowiedz) {
 void APIService::przetworzOdpowiedzPomiary(const QByteArray& odpowiedz) {
     QJsonDocument doc = QJsonDocument::fromJson(odpowiedz);
     if (!doc.isObject()) {
-        emit blad("Oczekiwano obiektu JSON");
+        emit blad("Oczekiwano obiektu JSON dla pomiarów");
         return;
     }
 
     QJsonObject obj = doc.object();
-    if (!obj.contains("key") || !obj.contains("values")) {
-        emit blad("Brak wymaganych danych pomiarowych");
+
+    // --- Stary format: {"key": "PM10", "values": [...]} ---
+    if (obj.contains("key") && obj.contains("values")) {
+        QString parametrKod = obj["key"].toString();
+        aktualneDane["pomiary"] = obj;
+        zapiszDaneAutomatycznie();
+        emit danePomiarowePobrane(obj["values"].toArray(), parametrKod);
         return;
     }
 
-    QString parametrKod = obj["key"].toString();
-    aktualneDane["pomiary"] = obj;
+    // --- Nowy format v1: {"Lista danych pomiarowych": [...]} ---
+    QJsonArray lista;
+    for (const QString& k : obj.keys()) {
+        if (obj[k].isArray()) {
+            lista = obj[k].toArray();
+            break;
+        }
+    }
+
+    if (lista.isEmpty()) {
+        emit blad("Brak danych pomiarowych w odpowiedzi");
+        return;
+    }
+
+    // Wyciągnij kod parametru z "Kod stanowiska" np. "DsKrakBujaka-PM10-1g" -> "PM10"
+    QString parametrKod = "N/A";
+    if (!lista.isEmpty()) {
+        QString kodStanowiska = lista.first().toObject()["Kod stanowiska"].toString();
+        QStringList czesci = kodStanowiska.split("-");
+        if (czesci.size() >= 3) {
+            // Usuń pierwszą (kod stacji) i ostatnią (interwał)
+            czesci.removeFirst();
+            czesci.removeLast();
+            parametrKod = czesci.join("-");
+        }
+    }
+
+    // Normalizuj do formatu wewnętrznego {"date": ..., "value": ...}
+    QJsonArray znormalizowane;
+    for (const QJsonValue& val : lista) {
+        QJsonObject p = val.toObject();
+        QJsonObject znorm;
+        znorm["date"]  = p["Data"].toString();
+        znorm["value"] = p[QString::fromUtf8("Wartość")].toDouble();
+        znormalizowane.append(znorm);
+    }
+
+    QJsonObject zapiszObj;
+    zapiszObj["key"]    = parametrKod;
+    zapiszObj["values"] = znormalizowane;
+    aktualneDane["pomiary"] = zapiszObj;
     zapiszDaneAutomatycznie();
-    emit danePomiarowePobrane(obj["values"].toArray(), parametrKod);
+    emit danePomiarowePobrane(znormalizowane, parametrKod);
 }
 
 /**
@@ -274,8 +436,8 @@ QJsonArray APIService::filtrujStacjePoMiescie(const QJsonArray& stacje, const QS
 
     for (const QJsonValue& val : stacje) {
         QJsonObject stacja = val.toObject();
-        QJsonObject city = stacja["city"].toObject();
-        QString aktualneMiasto = city["name"].toString().toLower();
+        QString aktualneMiasto =
+            stacja["Nazwa miasta"].toString().toLower();
 
         if (aktualneMiasto.contains(szukaneMiasto)) {
             wynik.append(stacja);
@@ -391,12 +553,12 @@ void APIService::znajdzStacjeWPromieniu(const QString& lokalizacja, double promi
 
         QGeoCoordinate coord = locations.first().coordinate();
 
-        if (cache.contains("https://api.gios.gov.pl/pjp-api/rest/station/findAll")) {
+        if (cache.contains("https://api.gios.gov.pl/pjp-api/v1/rest/station/findAll")) {
             QtConcurrent::run([=]() {
                 filtrujStacjeWPromieniu(coord.latitude(), coord.longitude(), promienKm);
             });
         } else {
-            QUrl url("https://api.gios.gov.pl/pjp-api/rest/station/findAll");
+            QUrl url("https://api.gios.gov.pl/pjp-api/v1/rest/station/findAll");
             QNetworkRequest request(url);
 
             request.setAttribute(QNetworkRequest::User, coord.latitude());
@@ -444,39 +606,47 @@ double APIService::obliczOdleglosc(double lat1, double lon1, double lat2, double
  * @param promienKm Promień w kilometrach.
  */
 void APIService::filtrujStacjeWPromieniu(double lat, double lon, double promienKm) {
-    if (!cache.contains("https://api.gios.gov.pl/pjp-api/rest/station/findAll"))
-        return;
+    const QString urlKey = "https://api.gios.gov.pl/pjp-api/v1/rest/station/findAll?size=500";
+    if (!cache.contains(urlKey)) return;
 
+    QJsonDocument* cachedDoc = cache[urlKey];
+    QJsonArray wszystkieStacje;
+    if (cachedDoc->isObject()) {
+        QJsonObject obj = cachedDoc->object();
+        if (obj.contains("Lista stacji pomiarowych"))
+            wszystkieStacje = obj["Lista stacji pomiarowych"].toArray();
+    } else if (cachedDoc->isArray()) {
+        wszystkieStacje = cachedDoc->array();
+    }
 
-        QJsonArray wszystkieStacje = cache["https://api.gios.gov.pl/pjp-api/rest/station/findAll"]->array();
-        QJsonArray stacjeWPromieniu;
+    const QString klatN = QString::fromUtf8("WGS84 \xCF\x86 N"); // φ
+    const QString klatE = QString::fromUtf8("WGS84 \xCE\xBB E"); // λ
 
-        for (const QJsonValue& val : wszystkieStacje) {
-            QJsonObject stacja = val.toObject();
-            double sLat = stacja["gegrLat"].toString().toDouble();
-            double sLon = stacja["gegrLon"].toString().toDouble();
-            double odleglosc = obliczOdleglosc(lat, lon, sLat, sLon);
-            if (odleglosc <= promienKm) {
-                QJsonObject kopia = stacja;
-                kopia["distance"] = odleglosc;
-                stacjeWPromieniu.append(kopia);
-            }
+    QJsonArray stacjeWPromieniu;
+    for (const QJsonValue& val : wszystkieStacje) {
+        QJsonObject stacja = val.toObject();
+        double sLat = stacja[klatN].toString().toDouble();
+        double sLon = stacja[klatE].toString().toDouble();
+        double odleglosc = obliczOdleglosc(lat, lon, sLat, sLon);
+        if (odleglosc <= promienKm) {
+            QJsonObject kopia = stacja;
+            kopia["distance"] = odleglosc;
+            stacjeWPromieniu.append(kopia);
         }
+    }
 
-        QList<QJsonObject> stacjeList;
-        for (const QJsonValue& val : stacjeWPromieniu) {
-            stacjeList.append(val.toObject());
-        }
+    QList<QJsonObject> stacjeList;
+    for (const QJsonValue& val : stacjeWPromieniu)
+        stacjeList.append(val.toObject());
 
-        std::sort(stacjeList.begin(), stacjeList.end(),
-                  [](const QJsonObject& a, const QJsonObject& b) {
-                      return a["distance"].toDouble() < b["distance"].toDouble();
-                  });
+    std::sort(stacjeList.begin(), stacjeList.end(),
+              [](const QJsonObject& a, const QJsonObject& b) {
+                  return a["distance"].toDouble() < b["distance"].toDouble();
+              });
 
-        QJsonArray sortedArray;
-        for (const QJsonObject& obj : stacjeList) {
-            sortedArray.append(obj);
-        }
+    QJsonArray sortedArray;
+    for (const QJsonObject& o : stacjeList)
+        sortedArray.append(o);
 
-        emit daneStacjiPobrane(sortedArray);
+    emit daneStacjiPobrane(sortedArray);
 }
