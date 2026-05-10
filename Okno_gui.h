@@ -120,6 +120,8 @@ private:
      */
     void setupUI();
 
+
+
     /**
      * @brief Inicjalizuje połączenia sygnałów i slotów.
      */
@@ -197,6 +199,8 @@ private:
     QWidget *statystykiWidget;          /**< Widżet do wyświetlania statystyk */
     QLabel *statystykiLabel;            /**< Etykieta ze statystykami */
     QPushButton *przyciskObliczStatystyki; /**< Przycisk do obliczania statystyk */
+
+    QString m_filtrMiasto; // <-- DODAJ TO (aktywny filtr nazwy miasta)
 };
 
 #endif // OKNO_GUI_H
